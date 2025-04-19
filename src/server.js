@@ -6,7 +6,6 @@ const { BufferMemory, ChatMessageHistory } = require('langchain/memory');
 const { ConversationChain } = require('langchain/chains');
 const { ChatPromptTemplate, MessagesPlaceholder } = require("@langchain/core/prompts");
 const cors = require('cors');
-const rich = require('rich-console');
 
 dotenv.config({ path: require('path').resolve(__dirname, '../.env') });
 
@@ -20,19 +19,19 @@ if (!API_KEY) {
     throw new Error('GROQ_API_KEY is required. Please check your .env file.');
 }
 
-// Initialize rich console styles
+// Initialize logger
 const logger = {
-    info: (msg) => rich.console.log(rich.green(msg)),
-    error: (msg) => rich.console.log(rich.red.bold(msg)),
-    warning: (msg) => rich.console.log(rich.yellow(msg)),
-    debug: (msg) => rich.console.log(rich.blue(msg))
+    info: (msg) => console.log(`INFO: ${msg}`),
+    error: (msg) => console.error(`ERROR: ${msg}`),
+    warning: (msg) => console.warn(`WARN: ${msg}`),
+    debug: (msg) => console.log(`DEBUG: ${msg}`)
 };
 
 // Create a chat prompt template with memory
 const chatPrompt = ChatPromptTemplate.fromMessages([
-    ["system", (system) => system || "You are a helpful AI assistant."],
+    new SystemMessage("You are a helpful AI assistant."),
     new MessagesPlaceholder("history"),
-    ["human", "{input}"],
+    new HumanMessage("{input}")
 ]);
 
 app.get('/', (req, res) => {
@@ -136,7 +135,7 @@ app.post('/api/chat', async (req, res) => {
 
     } catch (error) {
         logger.error(`Server Error: ${error.message}`);
-        console.error(rich.red.bold('Stack trace:'), error);
+        console.error('Stack trace:', error);
         if (!res.writableEnded) {
             const errorMessage = error.message || 'Unknown server error';
             res.write('\nServer Error: ' + errorMessage);
