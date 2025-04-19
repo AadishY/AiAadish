@@ -29,9 +29,9 @@ const logger = {
 
 // Create a chat prompt template with memory
 const chatPrompt = ChatPromptTemplate.fromMessages([
-    new MessagesPlaceholder("system_message"),
+    SystemMessage.fromTemplate("{system}"),
     new MessagesPlaceholder("history"),
-    new HumanMessage("{input}")
+    HumanMessage.fromTemplate("{message}")
 ]);
 
 // Valid model IDs
@@ -61,14 +61,20 @@ app.post('/api/chat', async (req, res) => {
             max_completion_tokens 
         } = req.body;
 
+        // Validate required parameters
         if (!message || typeof message !== 'string' || message.trim() === '') {
             return res.status(400).json({ error: 'Message is required and cannot be empty' });
         }
 
-        const modelId = model || "compound-beta";
-        if (!VALID_MODELS.includes(modelId)) {
-            return res.status(400).json({ error: 'Invalid model ID' });
-        }
+        // Validate optional parameters
+        const validatedConfig = {
+            message: message.trim(),
+            model: VALID_MODELS.includes(model) ? model : "compound-beta",
+            system: typeof system === 'string' && system.trim() ? system.trim() : "You are a helpful AI assistant.",
+            temperature: Number.isFinite(temperature) ? Math.max(0, Math.min(2, temperature)) : 1.0,
+            topP: Number.isFinite(top_p) ? Math.max(0, Math.min(1, top_p)) : 1.0,
+            maxTokens: Number.isInteger(max_completion_tokens) ? Math.max(1, max_completion_tokens) : 1024
+        };
 
         // Set headers for streaming response
         res.writeHead(200, {
@@ -78,15 +84,15 @@ app.post('/api/chat', async (req, res) => {
             'Cache-Control': 'no-cache'
         });
 
-        logger.info(`Processing chat request with model: ${modelId}`);
+        logger.info(`Processing chat request with model: ${validatedConfig.model}`);
         
         // Configure LangChain model
         const llm = new ChatGroq({
             apiKey: API_KEY,
-            model: modelId,
-            temperature: typeof temperature === 'number' ? temperature : 1.0,
-            maxTokens: typeof max_completion_tokens === 'number' ? max_completion_tokens : 1024,
-            topP: typeof top_p === 'number' ? top_p : 1.0,
+            model: validatedConfig.model,
+            temperature: validatedConfig.temperature,
+            maxTokens: validatedConfig.maxTokens,
+            topP: validatedConfig.topP,
             streaming: true,
             callbacks: [{
                 handleLLMNewToken(token) {
@@ -144,8 +150,8 @@ app.post('/api/chat', async (req, res) => {
 
         // Run the chain with the current message
         await chain.call({
-            input: message,
-            system_message: [new SystemMessage(system || "You are a helpful AI assistant.")]
+            message: validatedConfig.message,
+            system: validatedConfig.system
         });
 
     } catch (error) {
