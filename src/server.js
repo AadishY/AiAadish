@@ -2,9 +2,6 @@ const express = require('express');
 const dotenv = require('dotenv');
 const { ChatGroq } = require('@langchain/groq');
 const { HumanMessage, SystemMessage, AIMessage } = require("@langchain/core/messages");
-const { BufferMemory, ChatMessageHistory } = require('langchain/memory');
-const { ConversationChain } = require('langchain/chains');
-const { ChatPromptTemplate, MessagesPlaceholder } = require("@langchain/core/prompts");
 const cors = require('cors');
 
 dotenv.config({ path: require('path').resolve(__dirname, '../.env') });
@@ -20,7 +17,17 @@ if (!API_KEY) {
 }
 
 app.get('/', (req, res) => {
-    res.send('Welcome to the Aadish Chat API! Use POST /api/chat to interact.');
+    res.json({
+        status: 'success',
+        message: 'Welcome to the Aadish Chat API!',
+        endpoints: {
+            chat: {
+                method: 'POST',
+                path: '/api/chat',
+                description: 'Send chat messages to interact with the AI'
+            }
+        }
+    });
 });
 
 app.post('/api/chat', async (req, res) => {
@@ -32,22 +39,37 @@ app.post('/api/chat', async (req, res) => {
             history,
             temperature,
             top_p,
-            max_completion_tokens 
+            max_completion_tokens,
+            format = 'text' // New parameter for response format
         } = req.body;
 
         if (!message || typeof message !== 'string' || message.trim() === '') {
-            return res.status(400).json({ error: 'Message is required and cannot be empty' });
+            return res.status(400).json({ 
+                status: 'error',
+                error: 'Message is required and cannot be empty' 
+            });
         }
 
         const modelId = model || "compound-beta";
 
-        // Set headers for streaming response with proper encoding
-        res.writeHead(200, {
-            'Content-Type': 'text/plain; charset=utf-8',
-            'Transfer-Encoding': 'chunked',
-            'Connection': 'keep-alive',
-            'Cache-Control': 'no-cache'
-        });
+        // Set headers based on format
+        if (format === 'text') {
+            res.writeHead(200, {
+                'Content-Type': 'text/plain; charset=utf-8',
+                'Transfer-Encoding': 'chunked',
+                'Connection': 'keep-alive',
+                'Cache-Control': 'no-cache'
+            });
+        } else {
+            res.writeHead(200, {
+                'Content-Type': 'application/json; charset=utf-8',
+                'Transfer-Encoding': 'chunked',
+                'Connection': 'keep-alive',
+                'Cache-Control': 'no-cache'
+            });
+        }
+
+        let responseText = '';
 
         // Configure LangChain model with parameters
         const llm = new ChatGroq({
@@ -60,18 +82,42 @@ app.post('/api/chat', async (req, res) => {
             callbacks: [{
                 handleLLMNewToken(token) {
                     if (token) {
-                        // Ensure UTF-8 encoding for emojis
                         const encodedToken = Buffer.from(token, 'utf8').toString('utf8');
-                        res.write(encodedToken);
+                        if (format === 'text') {
+                            res.write(encodedToken);
+                        } else {
+                            responseText += encodedToken;
+                        }
                     }
                 },
                 handleLLMEnd() {
+                    if (format === 'json') {
+                        const response = {
+                            status: 'success',
+                            response: responseText,
+                            model: modelId,
+                            usage: {
+                                input_tokens: message.length / 4, // Approximate
+                                output_tokens: responseText.length / 4 // Approximate
+                            }
+                        };
+                        res.write(JSON.stringify(response));
+                    }
                     res.end();
                 },
                 handleLLMError(error) {
                     console.error('LLM Error:', error);
                     if (!res.writableEnded) {
-                        res.write('Error: ' + (error.message || 'Unknown error'));
+                        const errorResponse = {
+                            status: 'error',
+                            error: error.message || 'Unknown error',
+                            model: modelId
+                        };
+                        if (format === 'json') {
+                            res.write(JSON.stringify(errorResponse));
+                        } else {
+                            res.write('Error: ' + errorResponse.error);
+                        }
                         res.end();
                     }
                 }
@@ -100,8 +146,17 @@ app.post('/api/chat', async (req, res) => {
     } catch (error) {
         console.error('Server Error:', error);
         if (!res.writableEnded) {
-            const errorMessage = error.message || 'Unknown server error';
-            res.write('\nServer Error: ' + errorMessage);
+            const errorResponse = {
+                status: 'error',
+                error: error.message || 'Unknown server error',
+                timestamp: new Date().toISOString()
+            };
+            
+            if (req.body.format === 'json') {
+                res.write(JSON.stringify(errorResponse));
+            } else {
+                res.write('\nServer Error: ' + errorResponse.error);
+            }
             res.end();
         }
     }
