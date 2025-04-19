@@ -29,7 +29,7 @@ const logger = {
 
 // Create a chat prompt template with memory
 const chatPrompt = ChatPromptTemplate.fromMessages([
-    SystemMessage.fromTemplate("{system}"),
+    new MessagesPlaceholder("system_message"),
     new MessagesPlaceholder("history"),
     HumanMessage.fromTemplate("{message}")
 ]);
@@ -50,6 +50,7 @@ app.get('/', (req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
+    let responseEnded = false;
     try {
         const { 
             message, 
@@ -96,19 +97,27 @@ app.post('/api/chat', async (req, res) => {
             streaming: true,
             callbacks: [{
                 handleLLMNewToken(token) {
-                    if (token) {
-                        const encodedToken = Buffer.from(token, 'utf8').toString('utf8');
-                        res.write(encodedToken);
-                        logger.debug(`Token generated: ${token.slice(0, 30)}...`);
+                    try {
+                        if (token && !responseEnded) {
+                            const encodedToken = Buffer.from(token, 'utf8').toString('utf8');
+                            res.write(encodedToken);
+                            logger.debug(`Token generated: ${token.slice(0, 30)}...`);
+                        }
+                    } catch (err) {
+                        logger.error(`Token write error: ${err.message}`);
                     }
                 },
                 handleLLMEnd() {
-                    logger.info('Chat completion finished successfully');
-                    res.end();
+                    if (!responseEnded) {
+                        logger.info('Chat completion finished successfully');
+                        responseEnded = true;
+                        res.end();
+                    }
                 },
                 handleLLMError(error) {
                     logger.error(`LLM Error: ${error.message || 'Unknown error'}`);
-                    if (!res.writableEnded) {
+                    if (!responseEnded) {
+                        responseEnded = true;
                         res.write('Error: ' + (error.message || 'Unknown error'));
                         res.end();
                     }
@@ -118,19 +127,24 @@ app.post('/api/chat', async (req, res) => {
 
         // Initialize chat history if provided
         let chatHistory;
-        if (history && Array.isArray(history)) {
-            logger.info(`Initializing chat history with ${history.length} previous messages`);
-            const previousMessages = history.map(msg => {
-                if (!msg?.role || !msg?.content) return null;
-                if (msg.role === 'user') return new HumanMessage(msg.content);
-                if (msg.role === 'assistant') return new AIMessage(msg.content);
-                if (msg.role === 'system') return new SystemMessage(msg.content);
-                return null;
-            }).filter(Boolean);
-            
-            chatHistory = new ChatMessageHistory(previousMessages);
-        } else {
-            logger.debug('Starting new chat history');
+        try {
+            if (history && Array.isArray(history)) {
+                logger.info(`Initializing chat history with ${history.length} previous messages`);
+                const previousMessages = history.map(msg => {
+                    if (!msg?.role || !msg?.content) return null;
+                    if (msg.role === 'user') return new HumanMessage(msg.content);
+                    if (msg.role === 'assistant') return new AIMessage(msg.content);
+                    if (msg.role === 'system') return new SystemMessage(msg.content);
+                    return null;
+                }).filter(Boolean);
+                
+                chatHistory = new ChatMessageHistory(previousMessages);
+            } else {
+                logger.debug('Starting new chat history');
+                chatHistory = new ChatMessageHistory();
+            }
+        } catch (historyError) {
+            logger.error(`History initialization error: ${historyError.message}`);
             chatHistory = new ChatMessageHistory();
         }
 
@@ -151,13 +165,14 @@ app.post('/api/chat', async (req, res) => {
         // Run the chain with the current message
         await chain.call({
             message: validatedConfig.message,
-            system: validatedConfig.system
+            system_message: [new SystemMessage(validatedConfig.system)]
         });
 
     } catch (error) {
         logger.error(`Server Error: ${error.message}`);
         console.error('Stack trace:', error);
-        if (!res.writableEnded) {
+        if (!responseEnded) {
+            responseEnded = true;
             const errorMessage = error.message || 'Unknown server error';
             res.write('\nServer Error: ' + errorMessage);
             res.end();
