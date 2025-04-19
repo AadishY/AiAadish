@@ -29,10 +29,21 @@ const logger = {
 
 // Create a chat prompt template with memory
 const chatPrompt = ChatPromptTemplate.fromMessages([
-    new SystemMessage("You are a helpful AI assistant."),
+    new MessagesPlaceholder("system_message"),
     new MessagesPlaceholder("history"),
     new HumanMessage("{input}")
 ]);
+
+// Valid model IDs
+const VALID_MODELS = [
+    "compound-beta",
+    "compound-beta-mini",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "llama-3.3-70b-versatile",
+    "gemma2-9b-it",
+    "deepseek-r1-distill-llama-70b",
+    "qwen-qwq-32b"
+];
 
 app.get('/', (req, res) => {
     res.send('Welcome to the Aadish Chat API! Use POST /api/chat to interact.');
@@ -55,6 +66,9 @@ app.post('/api/chat', async (req, res) => {
         }
 
         const modelId = model || "compound-beta";
+        if (!VALID_MODELS.includes(modelId)) {
+            return res.status(400).json({ error: 'Invalid model ID' });
+        }
 
         // Set headers for streaming response
         res.writeHead(200, {
@@ -101,6 +115,7 @@ app.post('/api/chat', async (req, res) => {
         if (history && Array.isArray(history)) {
             logger.info(`Initializing chat history with ${history.length} previous messages`);
             const previousMessages = history.map(msg => {
+                if (!msg?.role || !msg?.content) return null;
                 if (msg.role === 'user') return new HumanMessage(msg.content);
                 if (msg.role === 'assistant') return new AIMessage(msg.content);
                 if (msg.role === 'system') return new SystemMessage(msg.content);
@@ -130,7 +145,7 @@ app.post('/api/chat', async (req, res) => {
         // Run the chain with the current message
         await chain.call({
             input: message,
-            system: system || "You are a helpful AI assistant."
+            system_message: [new SystemMessage(system || "You are a helpful AI assistant.")]
         });
 
     } catch (error) {
