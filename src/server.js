@@ -79,7 +79,9 @@ app.post('/api/chat', async (req, res) => {
             if (history && Array.isArray(history)) {
                 for (const msg of history) {
                     if (msg.role === 'user' || msg.role === 'assistant') {
-                        payload.contents.push({ role: msg.role === 'user' ? 'user' : 'model', parts: [{ text: msg.content }] });
+                        // Convert 'assistant' role to 'model' for Gemini API
+                        const geminiRole = msg.role === 'assistant' ? 'model' : 'user';
+                        payload.contents.push({ role: geminiRole, parts: [{ text: msg.content }] });
                     }
                 }
             }
