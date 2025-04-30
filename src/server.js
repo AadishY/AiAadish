@@ -6,6 +6,8 @@ const { BufferMemory, ChatMessageHistory } = require('langchain/memory');
 const { ConversationChain } = require('langchain/chains');
 const { ChatPromptTemplate, MessagesPlaceholder } = require("@langchain/core/prompts");
 const cors = require('cors');
+const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
+const fetch = require('node-fetch');
 
 dotenv.config({ path: require('path').resolve(__dirname, '../.env') });
 
@@ -40,6 +42,11 @@ app.post('/api/chat', async (req, res) => {
         }
 
         const modelId = model || "compound-beta";
+        const geminiModels = [
+            "gemma-3-27b-it",
+            "gemini-2.0-flash",
+            "gemini-2.5-flash-preview-04-17"
+        ];
 
         // Set headers for streaming response with proper encoding
         res.writeHead(200, {
@@ -48,6 +55,72 @@ app.post('/api/chat', async (req, res) => {
             'Connection': 'keep-alive',
             'Cache-Control': 'no-cache'
         });
+
+        if (geminiModels.includes(modelId)) {
+            if (!GOOGLE_API_KEY) {
+                res.write('Error: GOOGLE_API_KEY is required for Gemini models.');
+                return res.end();
+            }
+            // Google Gemini API endpoint
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${GOOGLE_API_KEY}`;
+            const payload = {
+                contents: [
+                    { role: 'user', parts: [{ text: message }] }
+                ],
+                generationConfig: {
+                    temperature: typeof temperature === 'number' ? temperature : 1.0,
+                    topP: typeof top_p === 'number' ? top_p : 1.0,
+                    maxOutputTokens: typeof max_completion_tokens === 'number' ? max_completion_tokens : 1024
+                }
+            };
+            if (system) {
+                payload.contents.unshift({ role: 'system', parts: [{ text: system }] });
+            }
+            if (history && Array.isArray(history)) {
+                for (const msg of history) {
+                    if (msg.role === 'user' || msg.role === 'assistant') {
+                        payload.contents.push({ role: msg.role === 'user' ? 'user' : 'model', parts: [{ text: msg.content }] });
+                    }
+                }
+            }
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                        'x-goog-api-version': '1beta'
+                    },
+                    body: JSON.stringify(payload),
+                    timeout: 30000 // 30 seconds timeout
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => null);
+                    const errorMessage = errorData?.error?.message || 
+                                      `HTTP error! status: ${response.status}`;
+                    res.write('Error: ' + errorMessage);
+                    return res.end();
+                }
+                
+                const data = await response.json();
+                if (!data?.candidates?.[0]?.content?.parts) {
+                    throw new Error('Invalid response structure from Gemini API');
+                }
+                
+                const text = data.candidates[0].content.parts.map(p => p.text).join(' ');
+                if (!text) {
+                    throw new Error('Empty response from Gemini model');
+                }
+                
+                res.write(text);
+                return res.end();
+            } catch (err) {
+                console.error('Gemini API Error:', err);
+                res.write('Error: ' + (err.message || 'Failed to process request'));
+                return res.end();
+            }
+        }
 
         // Configure LangChain model with parameters
         const llm = new ChatGroq({
