@@ -61,42 +61,55 @@ app.post('/api/chat', async (req, res) => {
                 res.write('Error: GOOGLE_API_KEY is required for Gemini models.');
                 return res.end();
             }
-            // Google Gemini API endpoint
+
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${GOOGLE_API_KEY}`;
-            const payload = {
-                contents: [
-                    { role: 'user', parts: [{ text: message }] }
-                ],
+            
+            // Format data according to Google's documentation
+            const data = {
                 generationConfig: {
                     temperature: typeof temperature === 'number' ? temperature : 1.0,
                     topP: typeof top_p === 'number' ? top_p : 1.0,
                     maxOutputTokens: typeof max_completion_tokens === 'number' ? max_completion_tokens : 1024
-                }
+                },
+                contents: []
             };
+
+            // Add system message if present
             if (system) {
-                payload.contents.unshift({ role: 'system', parts: [{ text: system }] });
+                data.contents.push({
+                    role: 'user',
+                    parts: [{ text: system }]
+                });
             }
+
+            // Add history messages
             if (history && Array.isArray(history)) {
                 for (const msg of history) {
+                    // Only include user and assistant messages
                     if (msg.role === 'user' || msg.role === 'assistant') {
-                        // Convert 'assistant' role to 'model' for Gemini API
-                        const geminiRole = msg.role === 'assistant' ? 'model' : 'user';
-                        payload.contents.push({ role: geminiRole, parts: [{ text: msg.content }] });
+                        data.contents.push({
+                            role: msg.role === 'assistant' ? 'model' : 'user',
+                            parts: [{ text: msg.content }]
+                        });
                     }
                 }
             }
+
+            // Add current message
+            data.contents.push({
+                role: 'user',
+                parts: [{ text: message }]
+            });
+
             try {
                 const response = await fetch(url, {
                     method: 'POST',
-                    headers: { 
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json',
-                        'x-goog-api-version': '1beta'
+                    headers: {
+                        'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify(payload),
-                    timeout: 30000 // 30 seconds timeout
+                    body: JSON.stringify(data)
                 });
-                
+
                 if (!response.ok) {
                     const errorData = await response.json().catch(() => null);
                     const errorMessage = errorData?.error?.message || 
@@ -104,17 +117,13 @@ app.post('/api/chat', async (req, res) => {
                     res.write('Error: ' + errorMessage);
                     return res.end();
                 }
-                
-                const data = await response.json();
-                if (!data?.candidates?.[0]?.content?.parts) {
+
+                const jsonResponse = await response.json();
+                if (!jsonResponse?.candidates?.[0]?.content?.parts?.[0]?.text) {
                     throw new Error('Invalid response structure from Gemini API');
                 }
-                
-                const text = data.candidates[0].content.parts.map(p => p.text).join(' ');
-                if (!text) {
-                    throw new Error('Empty response from Gemini model');
-                }
-                
+
+                const text = jsonResponse.candidates[0].content.parts[0].text;
                 res.write(text);
                 return res.end();
             } catch (err) {
